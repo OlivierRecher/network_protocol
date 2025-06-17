@@ -1,5 +1,5 @@
 #include "crypto_utils.hpp"
-#include <openssl/hmac.h>
+#include "/usr/include/openssl/hmac.h"
 #include <iomanip>
 #include <sstream>
 
@@ -16,8 +16,7 @@ std::string compute_hmac(const std::string &data, const std::string &key)
     unsigned char *result;
     unsigned int len = EVP_MAX_MD_SIZE;
 
-    result = HMAC(EVP_sha256(), key.data(), key.size(),
-                  (unsigned char *)data.data(), data.size(), NULL, &len);
+    result = HMAC(EVP_sha256(), key.data(), key.size(), (unsigned char *)data.data(), data.size(), NULL, &len);
 
     return to_hex(result, len);
 }
