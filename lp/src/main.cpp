@@ -225,9 +225,17 @@ void update_sender_thread()
     close(sock);
 }
 
-int main()
+int main(int argc, char *argv[])
 {
     routing_table.update_route(Route{ROUTER_ID, ROUTER_ID, 0});
+
+    if (argc < 2)
+    {
+        std::cerr << "Usage: ./lp <RouterID>\n";
+        return 1;
+    }
+    std::string router_id = argv[1];
+    routing_table.update_route(Route{router_id, router_id, 0});
 
     std::thread sender(sender_thread);
     std::thread receiver(receiver_thread);
