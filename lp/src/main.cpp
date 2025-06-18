@@ -3,174 +3,143 @@
 #include <chrono>
 #include <cstring>
 #include <sstream>
+#include <ifaddrs.h>
+#include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <unistd.h>
-#include <netinet/in.h>
-#include <ifaddrs.h>
 
+#include "crypto_utils.hpp"
 #include "neighbor_table.hpp"
 #include "routing_table.hpp"
-#include "crypto_utils.hpp"
 
 NeighborTable neighbor_table;
 RoutingTable routing_table;
 
-// Port utilisé par le protocole LRRP
 const int PORT = 8888;
+std::string ROUTER_ID;
+std::string LOCAL_IP;
+const std::string SHARED_KEY = "supersecretkey";
 
-const std::string ROUTER_ID = "RouterA";
-const std::string SHARED_SECRET_KEY = "supersecretkey"; //A modifier
-
-// Construire un message HELLO signé
-std::string build_hello_message()
+std::string detect_local_ip()
 {
-    std::string message = "HELLO from " + ROUTER_ID + "\n";
-    std::string signature = compute_hmac(message, SHARED_SECRET_KEY);
-    message += "--SIGNATURE " + signature;
-    return message;
+    struct ifaddrs *ifs, *ifa;
+    getifaddrs(&ifs);
+    for (ifa = ifs; ifa; ifa = ifa->ifa_next)
+    {
+        if (ifa->ifa_addr && ifa->ifa_addr->sa_family == AF_INET)
+        {
+            std::string name(ifa->ifa_name);
+            if (name != "lo")
+            {
+                char buf[INET_ADDRSTRLEN];
+                inet_ntop(AF_INET, &((struct sockaddr_in *)ifa->ifa_addr)->sin_addr,
+                          buf, sizeof(buf));
+                freeifaddrs(ifs);
+                return buf;
+            }
+        }
+    }
+    freeifaddrs(ifs);
+    return "0.0.0.0";
 }
 
-void sender_thread()
+std::string build_hello()
 {
-    int sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sock < 0)
-    {
-        perror("socket");
-        return;
-    }
+    std::string m = "HELLO from " + ROUTER_ID + " at " + LOCAL_IP + "\n";
+    auto sig = compute_hmac(m, SHARED_KEY);
+    return m + "--SIGNATURE " + sig;
+}
 
-    int broadcastEnable = 1;
-    if (setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &broadcastEnable, sizeof(broadcastEnable)) < 0)
+void sender_hello()
+{
+    int s = socket(AF_INET, SOCK_DGRAM, 0);
+    int be = 1;
+    setsockopt(s, SOL_SOCKET, SO_BROADCAST, &be, sizeof(be));
+    sockaddr_in a{AF_INET, htons(PORT), INADDR_BROADCAST};
+    while (1)
     {
-        perror("setsockopt (SO_BROADCAST)");
-        close(sock);
-        return;
-    }
-
-    sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(PORT);
-    addr.sin_addr.s_addr = inet_addr("255.255.255.255");
-
-    while (true)
-    {
-        std::string message = build_hello_message();
-        ssize_t sent = sendto(sock, message.c_str(), message.size(), 0, (sockaddr *)&addr, sizeof(addr));
-        if (sent < 0)
-        {
-            perror("sendto");
-        }
-        else
-        {
-            std::cout << "[HELLO] Sent: " << message << std::endl;
-        }
+        sendto(s, build_hello().c_str(), build_hello().size(), 0,
+               (sockaddr *)&a, sizeof(a));
+        std::cout << "[HELLO] sent\n";
         std::this_thread::sleep_for(std::chrono::seconds(5));
     }
-
-    close(sock);
 }
 
-void receiver_thread()
+void sender_update()
 {
-    int sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sock < 0)
+    int s = socket(AF_INET, SOCK_DGRAM, 0);
+    int be = 1;
+    setsockopt(s, SOL_SOCKET, SO_BROADCAST, &be, sizeof(be));
+    sockaddr_in a{AF_INET, htons(PORT), INADDR_BROADCAST};
+    while (1)
     {
-        perror("socket");
-        return;
+        std::ostringstream oss;
+        oss << "UPDATE from " << ROUTER_ID << "\n";
+        for (auto &p : routing_table.get_all_routes())
+            oss << p.first << " " << p.second.cost << "\n";
+        std::string m = oss.str();
+        std::string sig = compute_hmac(m, SHARED_KEY);
+        sendto(s, (m + "--SIGNATURE " + sig).c_str(),
+               m.size() + sig.size() + 13,
+               0, (sockaddr *)&a, sizeof(a));
+        std::cout << "[UPDATE] sent\n";
+        std::this_thread::sleep_for(std::chrono::seconds(10));
     }
+}
 
-    sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(PORT);
-    addr.sin_addr.s_addr = INADDR_ANY;
-
-    if (bind(sock, (sockaddr *)&addr, sizeof(addr)) < 0)
+void receiver()
+{
+    int s = socket(AF_INET, SOCK_DGRAM, 0);
+    sockaddr_in a{AF_INET, htons(PORT), INADDR_ANY};
+    bind(s, (sockaddr *)&a, sizeof(a));
+    char buf[1024];
+    while (1)
     {
-        perror("bind");
-        close(sock);
-        return;
-    }
+        int n = recvfrom(s, buf, sizeof(buf) - 1, 0, NULL, NULL);
+        if (n <= 0)
+            continue;
+        buf[n] = 0;
+        std::string r(buf);
+        auto pos = r.find("--SIGNATURE ");
+        if (pos == std::string::npos)
+            continue;
+        std::string body = r.substr(0, pos);
+        std::string sig = r.substr(pos + 12);
+        if (!verify_hmac(body, SHARED_KEY, sig))
+            continue;
 
-    char buffer[1024];
-    while (true)
-    {
-        sockaddr_in sender_addr{};
-        socklen_t sender_len = sizeof(sender_addr);
-        ssize_t received = recvfrom(sock, buffer, sizeof(buffer) - 1, 0, (sockaddr *)&sender_addr, &sender_len);
-        if (received > 0)
+        std::istringstream iss(body);
+        std::string line;
+        std::getline(iss, line);
+
+        if (line.rfind("HELLO from ", 0) == 0)
         {
-            buffer[received] = '\0';
-
-            char sender_ip[INET_ADDRSTRLEN];
-            inet_ntop(AF_INET, &sender_addr.sin_addr, sender_ip, INET_ADDRSTRLEN);
-
-            std::string raw_msg(buffer, received);
-
-            size_t sig_pos = raw_msg.find("--SIGNATURE ");
-            if (sig_pos == std::string::npos)
+            auto at = line.find(" at ");
+            std::string id = line.substr(11, at - 11);
+            std::string ip = line.substr(at + 4);
+            neighbor_table.update_neighbor(id, ip);
+            std::cout << "[RECV HELLO] " << id << " @ " << ip << "\n";
+        }
+        else if (line.rfind("UPDATE from ", 0) == 0)
+        {
+            std::string id = line.substr(12);
+            while (std::getline(iss, line) && !line.empty())
             {
-                std::cout << "[SECURITY] Signature absente – message ignoré\n";
-                continue;
+                std::istringstream ls(line);
+                std::string d;
+                int c;
+                ls >> d >> c;
+                routing_table.update_route({d, id, c + 1});
             }
-
-            std::string msg_body = raw_msg.substr(0, sig_pos);
-            std::string received_sig = raw_msg.substr(sig_pos + 12); // longueur de "--SIGNATURE "
-
-            // Vérification HMAC
-            if (!verify_hmac(msg_body, SHARED_SECRET_KEY, received_sig))
-            {
-                std::cout << "[SECURITY] Signature invalide – message rejeté\n";
-                continue;
-            }
-
-            // Signature valide, traitement du message
-            std::istringstream iss(msg_body);
-            std::string first_line;
-            std::getline(iss, first_line);
-
-            if (first_line.rfind("HELLO from ", 0) == 0)
-            {
-                std::string neighbor_id = first_line.substr(11);
-                neighbor_table.update_neighbor(neighbor_id, sender_ip);
-                std::cout << "[RECV][HELLO] From " << neighbor_id << " (" << sender_ip << ")\n";
-            }
-            else if (first_line.rfind("UPDATE from ", 0) == 0)
-            {
-                std::string from_id = first_line.substr(12);
-                std::string route_line;
-                while (std::getline(iss, route_line))
-                {
-                    if (route_line.empty())
-                        continue;
-
-                    std::istringstream r(route_line);
-                    std::string dest_id;
-                    int cost;
-                    r >> dest_id >> cost;
-
-                    Route new_route;
-                    new_route.destination_id = dest_id;
-                    new_route.next_hop_id = from_id;
-                    new_route.cost = cost + 1;
-
-                    routing_table.update_route(new_route);
-                }
-                std::cout << "[RECV][UPDATE] From " << from_id << "\n";
-            }
-            else
-            {
-                std::cout << "[RECV] Message inconnu: " << first_line << "\n";
-            }
+            std::cout << "[RECV UPDATE] " << id << "\n";
         }
     }
-
-    close(sock);
 }
 
-void neighbor_cleaner_thread()
+void cleaner()
 {
-    while (true)
+    while (1)
     {
         std::this_thread::sleep_for(std::chrono::seconds(5));
         neighbor_table.remove_stale_neighbors();
@@ -178,74 +147,24 @@ void neighbor_cleaner_thread()
     }
 }
 
-void update_sender_thread()
+int main(int argc, char **argv)
 {
-    int sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sock < 0)
-    {
-        perror("socket");
-        return;
-    }
-
-    int broadcastEnable = 1;
-    setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &broadcastEnable, sizeof(broadcastEnable));
-
-    sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(PORT);
-    addr.sin_addr.s_addr = inet_addr("255.255.255.255");
-
-    while (true)
-    {
-        std::ostringstream oss;
-        oss << "UPDATE from " << ROUTER_ID << "\n";
-
-        for (const auto &[dest, route] : routing_table.get_all_routes())
-        {
-            oss << route.destination_id << " " << route.cost << "\n";
-        }
-
-        std::string msg = oss.str();
-        std::string signature = compute_hmac(msg, SHARED_SECRET_KEY);
-        msg += "--SIGNATURE " + signature;
-
-        ssize_t sent = sendto(sock, msg.c_str(), msg.size(), 0, (sockaddr *)&addr, sizeof(addr));
-        if (sent < 0)
-        {
-            perror("sendto");
-        }
-        else
-        {
-            std::cout << "[UPDATE] Sent update\n";
-        }
-
-        std::this_thread::sleep_for(std::chrono::seconds(10));
-    }
-
-    close(sock);
-}
-
-int main(int argc, char *argv[])
-{
-    routing_table.update_route(Route{ROUTER_ID, ROUTER_ID, 0});
-
     if (argc < 2)
     {
-        std::cerr << "Usage: ./lp <RouterID>\n";
+        std::cout << "Usage: ./lp RouterID\n";
         return 1;
     }
-    std::string router_id = argv[1];
-    routing_table.update_route(Route{router_id, router_id, 0});
+    ROUTER_ID = argv[1];
+    LOCAL_IP = detect_local_ip();
+    std::cout << "ID=" << ROUTER_ID << " IP=" << LOCAL_IP << "\n";
+    routing_table.update_route({ROUTER_ID, ROUTER_ID, 0});
 
-    std::thread sender(sender_thread);
-    std::thread receiver(receiver_thread);
-    std::thread cleaner(neighbor_cleaner_thread);
-    std::thread updater(update_sender_thread);
+    std::thread(sender_hello).detach();
+    std::thread(sender_update).detach();
+    std::thread(receiver).detach();
+    std::thread(cleaner).detach();
 
-    sender.join();
-    receiver.join();
-    cleaner.join();
-    updater.join();
-
+    while (1)
+        std::this_thread::sleep_for(std::chrono::seconds(60));
     return 0;
 }

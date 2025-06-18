@@ -21,5 +21,5 @@ public:
 private:
     std::unordered_map<std::string, Neighbor> neighbors_;
     std::mutex mutex_;
-    const int timeout_seconds_ = 15;
+    int timeout_seconds_ = 15;
 };

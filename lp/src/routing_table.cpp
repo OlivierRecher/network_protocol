@@ -3,7 +3,6 @@
 void RoutingTable::update_route(const Route &route)
 {
     std::lock_guard<std::mutex> lock(mutex_);
-
     auto it = routes_.find(route.destination_id);
     if (it == routes_.end() || route.cost < it->second.cost)
     {
