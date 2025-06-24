@@ -5,7 +5,6 @@ void NeighborTable::update_neighbor(const std::string &id, const std::string &ip
 {
     std::lock_guard<std::mutex> lock(mutex_);
     auto now = std::chrono::steady_clock::now();
-
     neighbors_[id] = Neighbor{id, ip, now};
 }
 
@@ -38,4 +37,13 @@ void NeighborTable::print_neighbors()
         std::cout << " - " << id << " (" << neighbor.ip << ")" << std::endl;
     }
     std::cout << "=========================" << std::endl;
+}
+
+std::string NeighborTable::get_ip(const std::string &id)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = neighbors_.find(id);
+    if (it != neighbors_.end())
+        return it->second.ip;
+    return "";
 }

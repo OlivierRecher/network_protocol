@@ -8,6 +8,7 @@ struct Route
     std::string destination_id;
     std::string next_hop_id;
     int cost;
+    bool is_network = false; // true si c’est une route réseau
 };
 
 class RoutingTable
@@ -15,6 +16,7 @@ class RoutingTable
 public:
     void update_route(const Route &route);
     std::unordered_map<std::string, Route> get_all_routes();
+    void print_routes();
 
 private:
     std::unordered_map<std::string, Route> routes_;

@@ -1,0 +1,13 @@
+[Unit]
+Description=Lightweight Routing Protocol Service for %i
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/lp %i
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
