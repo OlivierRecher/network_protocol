@@ -225,13 +225,13 @@ void cleaner()
 
 int main(int argc, char **argv)
 {
-    if (argc < 2)
+    if (argc < 3)
     {
-        std::cerr << "Usage: ./lp <RouterID>\n";
+        std::cerr << "Usage: ./lp RouterID ConfigFile\n";
         return 1;
     }
-
     ROUTER_ID = argv[1];
+    std::string config_file = argv[2];
     LOCAL_IP = detect_local_ip();
     std::cout << "RouterID: " << ROUTER_ID << ", IP: " << LOCAL_IP << "\n";
 

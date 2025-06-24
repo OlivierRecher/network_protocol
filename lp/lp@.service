@@ -3,7 +3,7 @@ Description=Lightweight Routing Protocol Service for %i
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/lp %i
+ExecStart=/usr/local/bin/lp %i /etc/lp/r%i.conf
 Restart=always
 RestartSec=5
 StandardOutput=journal
