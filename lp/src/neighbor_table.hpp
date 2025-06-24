@@ -17,6 +17,7 @@ public:
     void update_neighbor(const std::string &id, const std::string &ip);
     void remove_stale_neighbors();
     void print_neighbors();
+    std::string get_ip(const std::string &id);
 
 private:
     std::unordered_map<std::string, Neighbor> neighbors_;

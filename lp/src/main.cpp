@@ -11,6 +11,7 @@
 #include <net/if.h>
 #include <cstdio>
 #include <vector>
+#include <cstdlib>
 
 #include "crypto_utils.hpp"
 #include "neighbor_table.hpp"
@@ -62,6 +63,31 @@ std::vector<std::string> get_local_networks()
     }
     pclose(fp);
     return networks;
+}
+
+bool route_exists(const std::string &network)
+{
+    std::string cmd = "ip route show | grep -w \"" + network + "\" > /dev/null 2>&1";
+    return std::system(cmd.c_str()) == 0;
+}
+
+void add_system_route(const std::string &network, const std::string &via_ip)
+{
+    if (route_exists(network))
+    {
+        std::cout << "[ROUTE] Already exists: " << network << "\n";
+        return;
+    }
+    std::string cmd = "ip route add " + network + " via " + via_ip;
+    int code = std::system(cmd.c_str());
+    if (code == 0)
+    {
+        std::cout << "[ROUTE ADDED] " << network << " via " << via_ip << "\n";
+    }
+    else
+    {
+        std::cerr << "[ERROR] Failed to add route: " << network << "\n";
+    }
 }
 
 std::string build_hello()
@@ -135,14 +161,19 @@ void receiver()
     bind(s, (sockaddr *)&addr, sizeof(addr));
 
     char buf[1024];
+    sockaddr_in src_addr;
+    socklen_t src_len = sizeof(src_addr);
+
     while (true)
     {
-        int n = recvfrom(s, buf, sizeof(buf) - 1, 0, NULL, NULL);
+        int n = recvfrom(s, buf, sizeof(buf) - 1, 0, (sockaddr *)&src_addr, &src_len);
         if (n <= 0)
             continue;
         buf[n] = '\0';
 
         std::string msg(buf);
+        std::string sender_ip = inet_ntoa(src_addr.sin_addr);
+
         size_t sig_pos = msg.find("--SIGNATURE ");
         if (sig_pos == std::string::npos)
             continue;
@@ -173,6 +204,7 @@ void receiver()
                 {
                     std::string net = line.substr(13);
                     routing_table.update_route({net, id, 1, true});
+                    add_system_route(net, sender_ip);
                 }
             }
             std::cout << "[RECV UPDATE] " << id << "\n";
@@ -211,7 +243,6 @@ int main(int argc, char **argv)
 
     routing_table.update_route({ROUTER_ID, ROUTER_ID, 0, false});
 
-    // Ajouter les routes locales détectées
     for (const auto &net : get_local_networks())
     {
         routing_table.update_route({net, ROUTER_ID, 0, true});

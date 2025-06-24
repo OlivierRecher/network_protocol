@@ -4,19 +4,21 @@
 void NeighborTable::update_neighbor(const std::string &id, const std::string &ip)
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    neighbors_[id] = {id, ip, std::chrono::steady_clock::now()};
+    auto now = std::chrono::steady_clock::now();
+    neighbors_[id] = Neighbor{id, ip, now};
 }
 
 void NeighborTable::remove_stale_neighbors()
 {
     std::lock_guard<std::mutex> lock(mutex_);
     auto now = std::chrono::steady_clock::now();
+
     for (auto it = neighbors_.begin(); it != neighbors_.end();)
     {
-        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - it->second.last_seen).count();
-        if (elapsed > timeout_seconds_)
+        auto duration = std::chrono::duration_cast<std::chrono::seconds>(now - it->second.last_seen).count();
+        if (duration > timeout_seconds_)
         {
-            std::cout << "[INFO] Neighbor " << it->second.id << " timed out.\n";
+            std::cout << "[INFO] Neighbor " << it->second.id << " timed out." << std::endl;
             it = neighbors_.erase(it);
         }
         else
@@ -29,10 +31,19 @@ void NeighborTable::remove_stale_neighbors()
 void NeighborTable::print_neighbors()
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    std::cout << "=== Active Neighbors ===\n";
+    std::cout << "=== Active Neighbors ===" << std::endl;
     for (const auto &[id, neighbor] : neighbors_)
     {
-        std::cout << " - " << id << " (" << neighbor.ip << ")\n";
+        std::cout << " - " << id << " (" << neighbor.ip << ")" << std::endl;
     }
-    std::cout << "=========================\n";
+    std::cout << "=========================" << std::endl;
+}
+
+std::string NeighborTable::get_ip(const std::string &id)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = neighbors_.find(id);
+    if (it != neighbors_.end())
+        return it->second.ip;
+    return "";
 }
