@@ -8,7 +8,7 @@ struct Route
     std::string destination_id;
     std::string next_hop_id;
     int cost;
-    bool is_network = false; // true si c’est une route réseau
+    bool is_network = false;
 };
 
 class RoutingTable
